@@ -43,7 +43,16 @@ export class Navigation {
 
 export class ZombieSystem {
   constructor(game){this.g=game;this.nav=new Navigation(game.world);this.reset();}
-  reset(){this.g.zombies=SPAWNS.map(([x,z],id)=>({id,x,z,yaw:Math.PI,home:{x,z},mode:'idle',phase:0,downTime:0,hitFlash:0,walkPhase:id,clock:0,cooldown:0,escapeClock:0,hiddenClock:0,repath:0,path:[],rest:0}));}
+  reset(){this.g.zombies=SPAWNS.map(([x,z],id)=>({id,x,z,yaw:Math.PI,home:{x,z},mode:'idle',phase:0,downTime:0,hitFlash:0,walkPhase:id,clock:0,cooldown:0,escapeClock:0,hiddenClock:0,repath:0,path:[],rest:0,kickHits:0,staggerClock:0}));}
+  // Difficulty rises with every memory collected. The scale is chosen so that
+  // after the 2nd memory chasers outpace a walking player (4.25) and after the
+  // 4th they reach the running speed (7.1), so the finale cannot be walked away.
+  escalation(){
+    const n=Math.min(4,this.g.memories.length);
+    const scale=[1,1.15,1.3,1.65,2.05][n];
+    const sight=[24,26,28,31,34][n];
+    return {n,scale,sight,alertRun:[22,24,26,29,32][n],alertWalk:[14,15,16,18,20][n]};
+  }
   shove(z,dx,dz){if(!this.nav.blocked(z.x+dx,z.z))z.x+=dx;if(!this.nav.blocked(z.x,z.z+dz))z.z+=dz;}
   kick(){
     const g=this.g,p=g.player;let hits=0;
@@ -51,17 +60,33 @@ export class ZombieSystem {
       if(z.mode==='down'||z.mode==='rising'||dist(p,z)>2.55)continue;
       const direction=Math.atan2(p.x-z.x,p.z-z.z);
       if(Math.cos(wrap(direction-p.yaw))<.45||!this.nav.clear(p,z))continue;
-      z.mode='down';z.downTime=8;z.phase=0;z.clock=0;z.hitFlash=.32;z.path=[];
+      if((z.kickHits||0)<1){
+        // First kick only staggers: a small flinch and a shove, then it keeps coming.
+        z.kickHits=1;z.hitFlash=.32;z.staggerClock=.55;z.phase=0;z.clock=0;z.path=[];z.repath=0;
+        const length=Math.max(.1,dist(p,z));this.shove(z,(z.x-p.x)/length*.34,(z.z-p.z)/length*.34);
+        hits++;g.combat.kicks++;g.emit('zombie-hit',z.id);g.say('Staggered — it is still coming. Kick again!',2.4);
+        continue;
+      }
+      z.mode='down';z.downTime=8;z.phase=0;z.clock=0;z.hitFlash=.32;z.path=[];z.kickHits=0;
       const length=Math.max(.1,dist(p,z));this.shove(z,(z.x-p.x)/length*.55,(z.z-p.z)/length*.55);
       hits++;g.combat.knockdowns++;g.emit('zombie-down',z.id);
     }
-    if(hits)g.say('Scattered. Their limbs are crawling back — make distance!',4);
+    if(hits&&g.zombies.some(z=>z.mode==='down'&&z.clock===0))g.say('Scattered. Their limbs are crawling back — make distance!',4);
     return hits;
   }
   step(dt){
-    const g=this.g,p=g.player;
+    const g=this.g,p=g.player,esc=this.escalation();
     for(const z of g.zombies){
       z.clock+=dt;z.cooldown=Math.max(0,z.cooldown-dt);z.rest=Math.max(0,z.rest-dt);z.hitFlash=Math.max(0,z.hitFlash-dt);z.repath-=dt;
+      if(z.staggerClock>0){
+        z.staggerClock=Math.max(0,z.staggerClock-dt);z.phase=Math.min(1,z.clock/.55);
+        z.yaw+=wrap(Math.atan2(p.x-z.x,p.z-z.z)-z.yaw)*Math.min(1,dt*3);
+        if(z.staggerClock<=0){
+          // Resume as a chaser, never mid-bite, so a stagger cannot become a free hit.
+          z.mode='chasing';z.clock=0;z.phase=0;z.repath=0;z.cooldown=.85;
+        }
+        continue;
+      }
       if(z.mode==='down'){
         z.downTime=Math.max(0,z.downTime-dt);z.phase=Math.min(1,z.clock/.42);
         if(z.clock>=1.4&&z.clock-dt<1.4)g.emit('zombie-reform',z.id);
@@ -70,7 +95,7 @@ export class ZombieSystem {
       if(z.mode==='rising'){
         z.phase=Math.min(1,z.clock/1.4);if(z.phase>=1){z.mode='idle';z.rest=.6;z.clock=0;z.repath=0;}continue;
       }
-      const d=dist(p,z),sight=d<24&&this.nav.clear(z,p);
+      const d=dist(p,z),sight=d<esc.sight&&this.nav.clear(z,p);
       if(z.mode==='windup'){
         z.phase=Math.min(1,z.clock/.52);z.yaw=Math.atan2(p.x-z.x,p.z-z.z);
         if(g.safe||d>1.65||!sight){z.mode='chasing';z.cooldown=.65;z.clock=0;continue;}
@@ -80,7 +105,7 @@ export class ZombieSystem {
         }continue;
       }
       if(z.mode==='cooldown'){z.phase=Math.min(1,z.clock/.55);if(z.clock>.55){z.mode='chasing';z.clock=0;}continue;}
-      if(z.mode==='idle'&&z.rest<=0&&!g.safe&&sight&&d<(g.running?22:14)){
+      if(z.mode==='idle'&&z.rest<=0&&!g.safe&&sight&&d<(g.running?esc.alertRun:esc.alertWalk)){
         z.mode='chasing';z.clock=0;z.repath=0;z.escapeClock=0;z.hiddenClock=0;g.combat.chases++;
         if(g.time-g.lastAlert>2){g.emit('zombie-alert');g.lastAlert=g.time;g.say('Footsteps behind you. Space kicks; Shift makes distance.',3.2);}
       }
@@ -104,7 +129,7 @@ export class ZombieSystem {
       const waypoint=z.path[0];if(!waypoint)continue;
       const dx=waypoint.x-z.x,dz=waypoint.z-z.z,length=Math.hypot(dx,dz);
       if(length<.15){z.path.shift();continue;}
-      const speed=chasing?3.3+(z.id%3)*.12:1.15,step=Math.min(length,speed*dt,chasing&&sight?Math.max(0,d-1.16):Infinity);
+      const speed=chasing?(3.3+(z.id%3)*.12)*esc.scale:1.15,step=Math.min(length,speed*dt,chasing&&sight?Math.max(0,d-1.16):Infinity);
       this.shove(z,dx/length*step,dz/length*step);
       z.yaw+=wrap(Math.atan2(dx,dz)-z.yaw)*Math.min(1,dt*8);z.walkPhase+=step*(chasing?4.5:4);
     }

@@ -18,7 +18,7 @@ const camera=new THREE.PerspectiveCamera(67,innerWidth/innerHeight,.08,600);came
 const renderer=new THREE.WebGLRenderer({antialias:true,powerPreference:'high-performance',alpha:false});
 renderer.setClearColor(0x172c3d);renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.18;
 renderer.shadowMap.enabled=false;renderer.setPixelRatio(renderScale);renderer.setSize(innerWidth,innerHeight);root.appendChild(renderer.domElement);
-renderer.domElement.setAttribute('aria-label','Three-dimensional haunted campus. Drag to look; WASD to walk, Shift to sprint, Space to kick.');renderer.domElement.tabIndex=0;
+renderer.domElement.setAttribute('aria-label','Three-dimensional haunted campus. Move the mouse to look; WASD to walk, Shift to sprint, Space to kick.');renderer.domElement.tabIndex=0;
 const hemi=new THREE.HemisphereLight(0xbadce8,0x41544a,2.15);scene.add(hemi);
 const moon=new THREE.DirectionalLight(moonColor,2.0);moon.position.set(-38,58,-25);scene.add(moon);
 const torch=new THREE.SpotLight(0xffe3ac,45,31,.52,.6,1.1);scene.add(torch,torch.target);
@@ -42,9 +42,11 @@ const bellVisual=new THREE.Mesh(new THREE.OctahedronGeometry(.22),new THREE.Mesh
 const zombieVisuals=createZombieVisuals(scene,camera);
 
 function clearInput(){key.clear();touch.x=0;touch.z=0;touch.interact=false;touch.run=false;drag=null;}
-function begin(isDemo=false,keep=false){if(!ready)return;audio.stopSession();audio.beginSession();clearInput();game.reset(keep);demo=isDemo?new DemoPlayer(game,{portrait:innerWidth/innerHeight<.8}):null;mode='playing';mapOpen=false;freeze=false;qualityWarmup=4;hemi.intensity=2.15;scene.background.set(0x172c3d);scene.fog.color.set(0x243b47);updateUI();}
+function begin(isDemo=false,keep=false){if(!ready)return;audio.stopSession();audio.beginSession();clearInput();game.reset(keep);demo=isDemo?new DemoPlayer(game,{portrait:innerWidth/innerHeight<.8}):null;mode='playing';mapOpen=false;freeze=false;qualityWarmup=4;hemi.intensity=2.15;scene.background.set(0x172c3d);scene.fog.color.set(0x243b47);updateUI();requestLookLock();}
 function pause(){if(mode==='playing'){mapOpen=false;mode='paused';game.mode='paused';audio.setPaused(true);clearInput();updateUI();}else if(mode==='paused')resume();}
-function resume(){if(mode!=='paused')return;mode='playing';game.mode='playing';clearInput();updateUI();audio.beginSession();audio.setPaused(false);}
+function resume(){if(mode!=='paused')return;mode='playing';game.mode='playing';clearInput();updateUI();audio.beginSession();audio.setPaused(false);requestLookLock();}
+// Called from a click handler so the browser allows the pointer lock request.
+function requestLookLock(){if(!canLock||demo||mapOpen)return;try{renderer.domElement.requestPointerLock();}catch{}}
 function toggleMap(){if(mode!=='playing')return;mapOpen=!mapOpen;clearInput();accumulator=0;audio.setPaused(mapOpen);updateUI();}
 function takeover(){if(!demo)return;demo=null;clearInput();game.say('You are in control. M opens your campus map.',5);updateUI();}
 const ui=createUI({start:()=>begin(false),demo:()=>begin(true),resume,retry:()=>begin(false,mode==='lost'),home:()=>{audio.stopSession();mode='title';if(game)game.mode='title';demo=null;clearInput();updateUI();},takeControl:takeover,
@@ -73,8 +75,29 @@ addEventListener('pagehide',event=>{
 addEventListener('beforeunload',()=>{if(mode==='playing')pause();audio.stopSession();});
 addEventListener('pageshow',event=>{if(event.persisted){last=0;updateUI();}});
 if(import.meta.hot)import.meta.hot.dispose(()=>audio.dispose());
-renderer.domElement.addEventListener('pointerdown',e=>{if(mode!=='playing'||mapOpen||demo)return;drag={id:e.pointerId,x:e.clientX,y:e.clientY};renderer.domElement.setPointerCapture(e.pointerId);audio.unlock();});
-renderer.domElement.addEventListener('pointermove',e=>{if(!drag||drag.id!==e.pointerId)return;look(e.clientX-drag.x,e.clientY-drag.y);drag.x=e.clientX;drag.y=e.clientY;});
+// Mouse look. On a desktop the pointer is locked to the canvas so moving the
+// mouse turns the view directly, the way first-person games normally work.
+// Touch and browsers without pointer lock fall back to press-and-drag.
+const canLock=typeof renderer.domElement.requestPointerLock==='function';
+let locked=false;
+renderer.domElement.addEventListener('pointerdown',e=>{
+  if(mode!=='playing'||mapOpen||demo)return;
+  audio.unlock();
+  if(canLock&&e.pointerType==='mouse'){
+    if(!locked)renderer.domElement.requestPointerLock();
+    return;
+  }
+  drag={id:e.pointerId,x:e.clientX,y:e.clientY};renderer.domElement.setPointerCapture(e.pointerId);
+});
+document.addEventListener('pointerlockchange',()=>{
+  const was=locked;locked=document.pointerLockElement===renderer.domElement;drag=null;
+  // Esc releases the lock. Pause instead of leaving the view frozen mid-chase.
+  if(was&&!locked&&mode==='playing'&&!mapOpen&&!demo)pause();
+});
+renderer.domElement.addEventListener('pointermove',e=>{
+  if(canLock&&e.pointerType==='mouse'&&locked){look(e.movementX??0,e.movementY??0);return;}
+  if(!drag||drag.id!==e.pointerId)return;look(e.clientX-drag.x,e.clientY-drag.y);drag.x=e.clientX;drag.y=e.clientY;
+});
 for(const name of ['pointerup','pointercancel','lostpointercapture'])renderer.domElement.addEventListener(name,()=>drag=null);
 function resize(){renderer.setPixelRatio(Math.min(devicePixelRatio,quality==='Detail'?1.25:renderScale));renderer.setSize(innerWidth,innerHeight);camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();}addEventListener('resize',resize);
 function input(){return {x:touch.x+(key.has('KeyD')||key.has('ArrowRight')?1:0)-(key.has('KeyA')||key.has('ArrowLeft')?1:0),z:touch.z+(key.has('KeyW')||key.has('ArrowUp')?1:0)-(key.has('KeyS')||key.has('ArrowDown')?1:0),run:touch.run||key.has('ShiftLeft')||key.has('ShiftRight'),interact:touch.interact||key.has('KeyE')};}
