@@ -27,6 +27,15 @@ npm start
 
 Open http://127.0.0.1:5190/ for the day tour or http://127.0.0.1:5190/night/ for the night game. Run all commands from the repository root; the root build packages both modes together. Rebuild after changing source files. The completed build works without internet access. Fonts, geometry, materials and sound generation are local.
 
+**If `npm run build` fails on Windows with `Access is denied`** on a path under `AppData\Local\Temp`, esbuild cannot delete its temporary file. This can happen when the Windows user profile path contains characters that the esbuild helper mishandles. Point `TEMP` at a folder inside the project for that terminal session, then rebuild:
+
+```powershell
+$env:TEMP = "$PWD\.tmp"; $env:TMP = $env:TEMP
+npm run build
+```
+
+The `.tmp` folder is only used for build scratch files and does not need to be committed. Run `npm start` in the same session if you keep the override.
+
 On Windows, after the first build you can also double-click **Start-GBU-Campus.cmd**. It uses the existing Codex Node runtime when available, otherwise Node from PATH, and opens the game.
 
 **5190 is the default local port.** Both `npm start` and the Windows launcher respect the `PORT` environment variable. To choose another port, set it before starting. For example, in PowerShell:
